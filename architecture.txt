@@ -1,0 +1,300 @@
+================================================================================
+  STOCKTRACKER - ARCHITECTURE OVERVIEW
+================================================================================
+
+OVERVIEW
+--------
+StockTracker is a Python desktop application that automates stock watchlist
+monitoring using technical analysis indicators. It fetches real-time market
+data, runs configurable indicator calculations, and surfaces buy/sell alerts
+in an interactive GUI.
+
+
+--------------------------------------------------------------------------------
+TECHNOLOGY STACK
+--------------------------------------------------------------------------------
+
+LANGUAGE
+  Python 3.8+
+
+GUI FRAMEWORK
+  CustomTkinter
+    - Modern wrapper around Python's built-in Tkinter
+    - Provides styled widgets with a dark theme
+    - Handles all UI rendering and event handling
+    - GitHub Dark-inspired color palette (see ui/theme.py)
+
+MARKET DATA
+  yfinance (Yahoo Finance API wrapper)
+    - Fetches OHLCV (Open, High, Low, Close, Volume) candlestick data
+    - 3-month historical window at daily intervals by default
+    - Also retrieves current price, % change, and volume stats
+    - Free, no API key required
+
+DATA PROCESSING
+  pandas
+    - Primary data structure for time-series OHLCV data (DataFrame)
+    - Used for rolling calculations (CCI, KDJ)
+    - Index manipulation and data alignment
+
+  numpy
+    - Numerical operations (mean, std deviation, etc.)
+    - Array math for indicator formulas
+
+TECHNICAL ANALYSIS
+  TA-Lib (C library + Python bindings)
+    - Industry-standard library with 150+ technical indicators
+    - Used for generic indicators added via the Indicators tab
+    - Examples: RSI, ATR, OBV, Bollinger Bands, ADX, MFI, EMA, SMA
+
+  Custom Implementations (core/indicators.py)
+    - CCI (Commodity Channel Index) - pure pandas/numpy
+    - MACD (Moving Average Convergence Divergence) - pandas EWM
+    - KDJ (Stochastic Oscillator) - pandas rolling min/max
+
+CHARTING
+  matplotlib
+    - Renders price OHLC / close-line charts
+    - Embeds indicator sub-plots (CCI, MACD, KDJ) below main chart
+    - Integrated into CustomTkinter via FigureCanvasTkAgg
+
+PACKAGING
+  PyInstaller
+    - Compiles the Python project into a standalone Windows executable
+    - Bundles all dependencies including CustomTkinter assets
+    - Config: StockTracker.spec
+    - Output: dist/StockTracker/ (folder-based distribution)
+
+PERSISTENCE
+  JSON files (no database)
+    - data/settings.json  - stocks list and indicator configurations
+    - data/alerts.json    - latest alert results with timestamp
+
+
+--------------------------------------------------------------------------------
+ARCHITECTURE LAYERS
+--------------------------------------------------------------------------------
+
+  ┌─────────────────────────────────────────────────────┐
+  │                    UI LAYER (ui/)                   │
+  │  app.py · home_page.py · stock_settings_page.py    │
+  │  indicator_settings_page.py · theme.py              │
+  └──────────────────────────┬──────────────────────────┘
+                             │  reads/writes
+  ┌──────────────────────────▼──────────────────────────┐
+  │               STORAGE LAYER (storage/)              │
+  │             settings_manager.py                     │
+  │         settings.json · alerts.json                 │
+  └──────────────────────────┬──────────────────────────┘
+                             │  config in / alerts out
+  ┌──────────────────────────▼──────────────────────────┐
+  │                CORE LAYER (core/)                   │
+  │   alert_engine.py → data_fetcher.py → yfinance     │
+  │                   → indicators.py  → TA-Lib         │
+  └─────────────────────────────────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+MODULE BREAKDOWN
+--------------------------------------------------------------------------------
+
+main.py
+  - Entry point. Instantiates the App class and starts the Tkinter event loop.
+
+core/data_fetcher.py
+  - fetch_stock_data(ticker, period, interval)
+      Downloads historical OHLCV data from Yahoo Finance via yfinance.
+      Returns a pandas DataFrame.
+  - get_stock_info(ticker)
+      Returns current price, 1-day % change, volume, and company name.
+
+core/indicators.py
+  - calc_cci(df, period)
+      Commodity Channel Index. Measures deviation from average price.
+      Oversold < -100, Overbought > 100.
+  - calc_macd(df, fast, slow, signal)
+      MACD line, signal line, and histogram using exponential moving averages.
+      Crossover of histogram through zero triggers buy/sell.
+  - calc_kdj(df, period, k_smooth, d_smooth)
+      KDJ stochastic oscillator. Tracks K, D, and J lines.
+      J-value thresholds + K/D crossover detection for signals.
+  - calc_generic_indicator(df, name, **params)
+      Wrapper around TA-Lib's function API. Supports 150+ indicators.
+  - is_indicator_available(name)
+      Checks if TA-Lib supports a given indicator name.
+
+core/alert_engine.py
+  - run_alerts(stocks, indicators, on_progress)
+      Main orchestration function. For each stock:
+        1. Fetches 3-month OHLCV data (data_fetcher)
+        2. Calculates all enabled indicators (indicators)
+        3. Compares latest values against buy/sell thresholds
+        4. Produces typed signals: BUY, SELL, ALERT, or no signal
+      Returns a dict of {ticker: {alerts, stats, indicator_values}}.
+      Runs in a background thread to keep the UI responsive.
+
+storage/settings_manager.py
+  - load_settings() / save_settings(data)
+      Reads and writes data/settings.json. Manages the stocks list and
+      all indicator definitions (type, enabled, parameters, thresholds).
+  - load_alerts() / save_alerts(data)
+      Reads and writes data/alerts.json. Persists the latest alert run
+      results and timestamp.
+
+ui/app.py
+  - Main application window (CTk root).
+  - Three-tab navigation: Home, Stocks, Indicators.
+  - Manages tab switching and visual tab indicator (active underline).
+
+ui/home_page.py
+  - Left panel:  "Attention" list - stocks with active alerts, color-coded.
+  - Center panel: Signal reasons textbox with per-signal colored tags.
+  - Right panel:  Matplotlib price chart + current stats (price, change, volume).
+                  Toggle buttons for CCI, MACD, KDJ indicator sub-plots.
+  - Update button: Triggers run_alerts() in a background thread; shows
+                   progress bar during fetch.
+
+ui/stock_settings_page.py
+  - Add/remove stock tickers with input validation.
+  - Scrollable ticker list.
+  - Preview panel: chart and stats for the selected stock.
+
+ui/indicator_settings_page.py
+  - Active Indicators panel: shows enabled indicators with toggle/delete.
+  - Add Indicator panel: searchable autocomplete list of all TA-Lib indicators.
+  - Config panel: two-column layout for calculation parameters (left) and
+                  alert thresholds (right). Save/Reset buttons.
+  - Dynamically generates input fields from indicator metadata.
+
+ui/theme.py
+  - Single source of truth for all colors (BACKGROUND, SURFACE, ACCENT,
+    SUCCESS, DANGER, WARNING, TEXT, MUTED, BORDER, CHART_COLORS).
+  - GitHub Dark palette.
+
+
+--------------------------------------------------------------------------------
+DATA FLOW
+--------------------------------------------------------------------------------
+
+1. STARTUP
+   main.py → App() → loads settings from settings.json → renders UI
+
+2. CONFIGURATION
+   User → Stocks tab → add/remove tickers → save_settings()
+   User → Indicators tab → enable/configure indicators → save_settings()
+
+3. ALERT RUN (on "Update" button click)
+   home_page.py
+     └─ Background thread: run_alerts(stocks, indicators)
+           ├─ data_fetcher.fetch_stock_data(ticker)  →  yfinance  →  OHLCV DataFrame
+           ├─ indicators.calc_cci / calc_macd / calc_kdj / calc_generic_indicator
+           └─ compare latest value vs buy_threshold / sell_threshold
+                 → generate BUY / SELL / ALERT signals
+     └─ save_alerts(results)
+     └─ Update UI: render Attention list, signal text, chart
+
+4. CHART INTERACTION
+   User clicks stock in Attention list
+     → display signal reasons in center panel
+     → render matplotlib price chart in right panel
+   User clicks indicator toggle button (CCI / MACD / KDJ)
+     → re-render chart with indicator sub-plot appended below price
+
+
+--------------------------------------------------------------------------------
+CONFIGURATION SCHEMA
+--------------------------------------------------------------------------------
+
+data/settings.json
+  {
+    "stocks": ["AAPL", "TSLA", "KO"],
+    "indicators": [
+      {
+        "type": "CCI",
+        "enabled": true,
+        "period": 20,
+        "buy_threshold": -100.0,
+        "sell_threshold": 100.0
+      },
+      {
+        "type": "MACD",
+        "enabled": true,
+        "fast": 12,
+        "slow": 26,
+        "signal": 9,
+        "buy_threshold": 0.0,
+        "sell_threshold": 0.0
+      },
+      {
+        "type": "KDJ",
+        "enabled": true,
+        "period": 9,
+        "k_smooth": 3,
+        "d_smooth": 3,
+        "buy_threshold": 20.0,
+        "sell_threshold": 80.0
+      }
+    ]
+  }
+
+data/alerts.json
+  {
+    "timestamp": "2025-01-01 09:30:00",
+    "results": {
+      "AAPL": {
+        "alerts": [{"type": "SELL", "indicator": "CCI", "reason": "..."}],
+        "stats":  {"price": 185.20, "change_pct": -1.2, "volume": 54000000},
+        "indicator_values": {"CCI": 142.5, "MACD_hist": -0.3}
+      }
+    }
+  }
+
+
+--------------------------------------------------------------------------------
+BUILD & DISTRIBUTION
+--------------------------------------------------------------------------------
+
+Build Tool: PyInstaller
+Config:     StockTracker.spec
+
+The spec file:
+  - Sets the application name and icon
+  - Bundles CustomTkinter's asset directory (themes, images)
+  - Includes plyer for Windows desktop notifications
+  - Produces a one-folder distribution in dist/StockTracker/
+  - The main executable is dist/StockTracker/StockTracker.exe
+
+To build:
+  pyinstaller StockTracker.spec
+
+To run without building:
+  python main.py
+
+
+--------------------------------------------------------------------------------
+KEY DESIGN DECISIONS
+--------------------------------------------------------------------------------
+
+1. NO DATABASE
+   JSON files are sufficient for a personal desktop tool. Settings and alerts
+   are small and don't require querying or relational structure.
+
+2. BACKGROUND THREADING
+   The alert engine runs in a Python thread (not async) to keep the Tkinter
+   event loop from blocking during network I/O and computation.
+
+3. CUSTOM vs TA-LIB INDICATORS
+   CCI, MACD, and KDJ are implemented in pure pandas/numpy for fine-grained
+   control and custom signal logic (crossover detection, convergence zones).
+   All other indicators delegate to TA-Lib for reliability and coverage.
+
+4. THRESHOLD-BASED ALERTS
+   Rather than pattern recognition (e.g. candlestick patterns), alerts are
+   driven by numeric threshold comparisons. This makes the system transparent
+   and configurable by the user.
+
+5. SINGLE-WINDOW NAVIGATION
+   All tabs share one Tkinter root window. Pages are swapped in-place to avoid
+   the complexity of multiple top-level windows.
+
+================================================================================
